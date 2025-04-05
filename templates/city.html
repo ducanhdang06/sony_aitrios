@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ city }} Crowd Levels</title>
+    <meta http-equiv="refresh" content="30">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+        }
+        .content {
+            width: 60%;
+            padding: 30px;
+            overflow-y: auto;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .card {
+            position: relative;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            overflow: hidden;
+            padding: 16px;
+            text-align: center;
+        }
+        .card img {
+            width: 100%;
+            height: 160px;
+            object-fit: cover;
+            border-radius: 8px;
+        }
+        .crowd-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        .low { background: #d4edda; color: #155724; }
+        .medium { background: #fff3cd; color: #856404; }
+        .high { background: #f8d7da; color: #721c24; }
+        #map {
+            width: 40%;
+            height: 100%;
+        }
+        .star-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #ffd700;
+            text-shadow: 0 0 3px rgba(0,0,0,0.5);
+            z-index: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="content">
+        <h1>Live Crowd Levels – {{ city }}</h1>
+
+        <div class="grid">
+            {% for r in results %}
+            <div class="card" onclick="handleCardClick(event, '{{ r.name }}', '{{ city }}', '{{ r.image }}', {{ r.lat }}, {{ r.lng }})">
+
+            <!--<div class="card" data-name="{{ r.name }}" data-city="{{ city }}" data-image="{{ r.image }}" data-lat="{{ r.lat }}" data-lng="{{ r.lng }}">-->
+                <button class="star-btn" data-name="{{ r.name }}" data-city="{{ city }}" id="star-{{ r.name | replace(' ', '-') }}">
+                    ☆
+                </button>
+                <img src="{{ r.image }}" alt="{{ r.name }}">
+                <h3>{{ r.name }}</h3>
+                <p><strong>{{ r.count }}</strong> people detected</p>
+                <div class="crowd-badge {{ r.level_class }}">{{ r.level_text }}</div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <h2 style="margin-top: 40px;">Current Crowd Comparison</h2>
+        <canvas id="crowdChart" height="100"></canvas>
+        <a href="/">← Choose another city</a>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script>
+        // Main chart instance
+        let mainChart;
+
+        // Initialize Chart
+        const ctx = document.getElementById('crowdChart').getContext('2d');
+        mainChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: {{ chart_data.labels | tojson | safe }},
+                datasets: [{
+                    label: 'People Count',
+                    data: {{ chart_data.counts | tojson | safe }},
+                    backgroundColor: {{ chart_data.colors | tojson | safe }},
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { stepSize: 10 }
+                    }
+                }
+            }
+        });
+
+        // Leaflet Map
+        const map = L.map('map');
+        const locations = {{ results | tojson | safe }};
+        const bounds = [];
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        locations.forEach((location) => {
+            if (location.lat && location.lng) {
+                const marker = L.marker([location.lat, location.lng]).addTo(map);
+                marker.bindPopup(`<b>${location.name}</b><br>${location.count} people<br>${location.level_text}`);
+                bounds.push([location.lat, location.lng]);
+            }
+        });
+
+        if (bounds.length > 0) {
+            map.fitBounds(bounds, { padding: [30, 30] });
+        } else {
+            map.setView([0, 0], 2);
+        }
+
+        if ("Notification" in window) {
+            Notification.requestPermission();
+        }
+
+        // Add click handler for cards
+        document.querySelectorAll('.card').forEach(card => {
+            card.addEventListener('click', (event) => {
+                // Don't trigger if clicking the star button or its children
+                const starBtn = event.target.closest('.star-btn');
+                if (!starBtn) {
+                    const data = card.dataset;
+                    console.log('Opening popup for:', data); // Debug log
+                    openPopup(data.name, data.city, data.image, parseFloat(data.lat), parseFloat(data.lng));
+                }
+            });
+        });
+
+        // Add click handler for star buttons
+        document.querySelectorAll('.star-btn').forEach(btn => {
+            btn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                const name = btn.dataset.name;
+                const city = btn.dataset.city;
+                toggleFavorite(event, name, city);
+            });
+        });
+
+        function toggleFavorite(event, attraction, city) {
+            event.stopPropagation();
+            const starBtn = document.getElementById(`star-${attraction.replace(' ', '-')}`);
+            const favorites = JSON.parse(localStorage.getItem('favorites') || '{}');
+            const key = `${city}:${attraction}`;
+
+            if (favorites[key]) {
+                delete favorites[key];
+                starBtn.textContent = '☆';
+            } else {
+                favorites[key] = true;
+                starBtn.textContent = '★';
+                if (Notification.permission === "granted") {
+                    new Notification(`Added ${attraction} to favorites`, {
+                        body: "You'll be notified when it's less crowded!"
+                    });
+                }
+            }
+
+            localStorage.setItem('favorites', JSON.stringify(favorites));
+        }
+
+        function updateFavoriteButtons() {
+            const favorites = JSON.parse(localStorage.getItem('favorites') || '{}');
+            Object.keys(favorites).forEach(key => {
+                const [city, attraction] = key.split(':');
+                const starBtn = document.getElementById(`star-${attraction.replace(' ', '-')}`);
+                if (starBtn) {
+                    starBtn.textContent = '★';
+                }
+            });
+        }
+
+        function checkCrowdLevels() {
+            const favorites = JSON.parse(localStorage.getItem('favorites') || '{}');
+            document.querySelectorAll('.card').forEach(card => {
+                const name = card.querySelector('h3').textContent;
+                const city = '{{ city }}';
+                const key = `${city}:${name}`;
+                if (favorites[key]) {
+                    const badge = card.querySelector('.crowd-badge');
+                    if (badge.classList.contains('low') && Notification.permission === "granted") {
+                        new Notification(`Low crowds at ${name}!`, {
+                            body: "Now is a great time to visit!",
+                            icon: card.querySelector('img').src
+                        });
+                    }
+                }
+            });
+        }
+
+        function pollCityData(city) {
+            setInterval(() => {
+                fetch(`/city_data/${encodeURIComponent(city)}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        const favorites = JSON.parse(localStorage.getItem("favorites") || "{}");
+                        const sortedData = data.data.slice().sort((a, b) => a.count - b.count);
+
+                        // Update existing cards
+                        document.querySelectorAll('.card').forEach(card => {
+                            const name = card.querySelector('h3').textContent;
+                            const attraction = data.data.find(a => a.name === name);
+                            
+                            if (attraction) {
+                                const countElem = card.querySelector('p strong');
+if (countElem) countElem.textContent = attraction.count;
+
+const badge = card.querySelector('.crowd-badge');
+if (badge) {
+    badge.textContent = attraction.level_text;
+    badge.className = `crowd-badge ${attraction.level_class}`;
+}
+
+                                // Check for notifications
+                                const key = `${city}:${name}`;
+                                if (favorites[key] && attraction.level_class === "low") {
+                                    if (Notification.permission === "granted") {
+                                        new Notification(`Low crowd at ${name}!`, {
+                                            body: "Now is a great time to visit!",
+                                            icon: card.querySelector('img').src
+                                        });
+                                    }
+                                }
+                            }
+                        });
+
+                        // Update chart
+                        mainChart.data.labels = sortedData.map(d => d.name);
+                        mainChart.data.datasets[0].data = sortedData.map(d => d.count);
+                        mainChart.data.datasets[0].backgroundColor = sortedData.map(d => {
+                            if (d.level_class === "low") return "green";
+                            if (d.level_class === "medium") return "orange";
+                            return "red";
+                        });
+                        mainChart.update();
+                    });
+            }, 5000);
+        }
+
+        function openPopup(attraction, city, image, lat, lng) {
+            console.log('Fetching data for:', attraction, city); // Debug log
+            fetch(`/attraction/${encodeURIComponent(city)}/${encodeURIComponent(attraction)}`)
+                .then(res => res.json())
+                .then(data => {
+                    console.log('Received data:', data); // Debug log
+                    const labels = data.data.map(d => d.datetime);
+                    const values = data.data.map(d => d.people_count);
+
+                    document.getElementById("popupTitle").textContent = attraction;
+                    document.getElementById("popupImage").src = image;
+                    document.getElementById("popupMapLink").href =
+                        `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+
+                    if (chartInstance) chartInstance.destroy();
+                    const ctx = document.getElementById("popupChart").getContext("2d");
+                    chartInstance = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'People Count',
+                                data: values,
+                                backgroundColor: '#339af0'
+                            }]
+                        },
+                        options: {
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    ticks: { stepSize: 10 }
+                                }
+                            }
+                        }
+                    });
+
+                    document.getElementById("popup").style.display = "flex";
+                })
+                .catch(error => {
+                    console.error('Error fetching attraction data:', error); // Debug log
+                });
+        }
+
+        function closePopup() {
+            document.getElementById("popup").style.display = "none";
+        }
+
+        // On load
+        document.addEventListener('DOMContentLoaded', () => {
+            updateFavoriteButtons();
+            pollCityData('{{ city }}');
+            setInterval(checkCrowdLevels, 30000);
+        });
+    </script>
+
+    <!-- Modal -->
+    <div id="popup" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.5); z-index:9999; justify-content:center; align-items:center;">
+        <div style="background:white; padding:20px; border-radius:12px; max-width:600px; width:90%; position:relative;">
+            <button onclick="closePopup()" style="position:absolute; top:10px; right:10px;">❌</button>
+            <h2 id="popupTitle"></h2>
+            <img id="popupImage" src="" alt="attraction image" style="width:100%; height:200px; object-fit:cover; border-radius:8px;">
+            <canvas id="popupChart" style="margin-top:20px;"></canvas>
+            <a id="popupMapLink" target="_blank" style="display:block; margin-top:20px; font-weight:bold;">📍 Get Directions</a>
+        </div>
+    </div>
+</body>
+</html>
