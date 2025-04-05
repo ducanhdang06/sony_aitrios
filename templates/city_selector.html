@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Choose a City</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 40px;
+            background-color: #f8f9fa;
+            max-width: 600px;
+            margin: auto;
+        }
+        h1 {
+            text-align: center;
+        }
+        form {
+            margin-top: 30px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        select, button {
+            font-size: 16px;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+        }
+        small {
+            display: block;
+            text-align: center;
+            margin-top: 30px;
+            color: gray;
+        }
+    </style>
+</head>
+<body>
+    <h1>Select Your City</h1>
+
+    <form method="POST" action="/city">
+        <select name="city" required>
+            {% for city in cities %}
+                <option value="{{ city }}">{{ city }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit">Show Attractions</button>
+    </form>
+
+    <small>You’ll still get notifications for favorited places even while on this page.</small>
+
+    <script>
+        // Ask for notification permission
+        if ("Notification" in window) {
+            Notification.requestPermission();
+        }
+
+        function checkFavoriteCrowds() {
+            const favorites = JSON.parse(localStorage.getItem("favorites") || "{}");
+            const citiesToCheck = [...new Set(Object.keys(favorites).map(key => key.split(":")[0]))];
+
+            citiesToCheck.forEach(city => {
+                fetch(`/city_data/${encodeURIComponent(city)}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        data.data.forEach(attraction => {
+                            const key = `${city}:${attraction.name}`;
+                            if (favorites[key] && attraction.level_class === "low") {
+                                if (Notification.permission === "granted") {
+                                    new Notification(`Low crowd at ${attraction.name}`, {
+                                        body: "Now is a great time to visit!",
+                                    });
+                                }
+                            }
+                        });
+                    });
+            });
+        }
+
+        // Poll every 30 seconds
+        setInterval(checkFavoriteCrowds, 5000);
+        checkFavoriteCrowds(); // Run once immediately
+    </script>
+</body>
+</html>
